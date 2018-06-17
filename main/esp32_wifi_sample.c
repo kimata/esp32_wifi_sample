@@ -1,5 +1,5 @@
 /*
- * ESP32 ULP Rain Gauge Application
+ * ESP32 WiFi connect sample
   *
  * Copyright (C) 2018 KIMATA Tetsuya <kimata@green-rabbit.net>
  *
