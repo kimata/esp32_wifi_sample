@@ -9,29 +9,15 @@
  */
 
 #include "nvs_flash.h"
-#include "soc/rtc.h"
-#include "soc/sens_reg.h"
-#include "driver/gpio.h"
-#include "driver/rtc_io.h"
-#include "driver/adc.h"
-#include "lwip/sockets.h"
 
 #define LOG_LOCAL_LEVEL ESP_LOG_INFO
 #include "esp_log.h"
 
-#include "esp_adc_cal.h"
-#include "esp_err.h"
 #include "esp_event_loop.h"
-#include "esp_sleep.h"
 #include "esp_spi_flash.h"
-#include "esp_task_wdt.h"
 #include "esp_wifi.h"
 
-#include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
-
-#include "cJSON.h"
 
 #include "wifi_config.h"
 // wifi_config.h should define followings.
