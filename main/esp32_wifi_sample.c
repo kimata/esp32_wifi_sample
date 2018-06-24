@@ -16,7 +16,7 @@
 #include "esp_event_loop.h"
 #include "esp_spi_flash.h"
 #include "esp_wifi.h"
-
+#include "esp_clk_internal.h"
 #include <string.h>
 
 #include "wifi_config.h"
@@ -156,6 +156,7 @@ void app_main()
     wifi_ap_record_t ap_info;
     vSemaphoreCreateBinary(wifi_conn_done);
 
+    esp_clk_init();
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
     uint32_t time_start = xTaskGetTickCount();
