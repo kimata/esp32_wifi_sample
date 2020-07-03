@@ -13,7 +13,7 @@
 #define LOG_LOCAL_LEVEL ESP_LOG_INFO
 #include "esp_log.h"
 
-#include "esp_event_loop.h"
+#include "esp_event.h"
 #include "esp_spi_flash.h"
 #include "esp_wifi.h"
 #include "esp_sleep.h"
@@ -24,11 +24,13 @@
 // #define WIFI_SSID "XXXXXXXX"            // WiFi SSID
 // #define WIFI_PASS "XXXXXXXX"            // WiFi Password
 
-#define WIFI_HOSTNAME "ESP32-wifi_connect" // module's hostname
+#define WIFI_HOSTNAME "esp32-wifi-sample"  // module's hostname
 #define WIFI_CONNECT_TIMEOUT 3
 
 #define TAG "WIFI-SAMPLE"
 
+esp_event_handler_instance_t wifi_handler_any_id;
+esp_event_handler_instance_t wifi_handler_got_ip;
 SemaphoreHandle_t wifi_conn_done = NULL;
 
 //////////////////////////////////////////////////////////////////////
@@ -57,32 +59,23 @@ static void _error_check_failed(esp_err_t rc, const char *file, int line,
 
 //////////////////////////////////////////////////////////////////////
 // Wifi Function
-static esp_err_t event_handler(void *ctx, system_event_t *event)
+static void event_handler(void* arg, esp_event_base_t event_base,
+                          int32_t event_id, void* event_data)
 {
-    switch(event->event_id) {
-    case SYSTEM_EVENT_STA_START:
-        ESP_LOGI(TAG, "SYSTEM_EVENT_STA_START");
-        ERROR_RETURN(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, WIFI_HOSTNAME), ESP_FAIL);
-        ERROR_RETURN(esp_wifi_connect(), ESP_FAIL);
-        break;
-    case SYSTEM_EVENT_STA_CONNECTED:
-        ESP_LOGI(TAG, "SYSTEM_EVENT_STA_CONNECTED");
-        break;
-    case SYSTEM_EVENT_STA_GOT_IP:
-        ESP_LOGI(TAG, "SYSTEM_EVENT_STA_GOT_IP");
+    static uint32_t retry = 0;
+
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        retry++;
+        esp_wifi_connect();
+        ESP_LOGI(TAG, "retry to connect to the AP (n=%d)", retry);
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
+        retry = 0;
         xSemaphoreGive(wifi_conn_done);
-        break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-        ESP_LOGI(TAG, "SYSTEM_EVENT_STA_DISCONNECTED");
-        xSemaphoreGive(wifi_conn_done);
-        break;
-    case SYSTEM_EVENT_STA_STOP:
-        ESP_LOGI(TAG, "SYSTEM_EVENT_STA_STOP");
-        break;
-    default:
-        break;
     }
-    return ESP_OK;
 }
 
 static bool wifi_init()
@@ -96,15 +89,16 @@ static bool wifi_init()
     }
     ERROR_RETURN(ret, false);
 
-    tcpip_adapter_init();
+    ERROR_RETURN(esp_netif_init(), false);
+    ERROR_RETURN(esp_event_loop_create_default(), false);
 
-    ERROR_RETURN(esp_event_loop_init(event_handler, NULL), false);
+    esp_netif_t *esp_netif = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 
     ERROR_RETURN(esp_wifi_init(&cfg), false);
-    ERROR_RETURN(esp_wifi_set_storage(WIFI_STORAGE_RAM), false);
     ERROR_RETURN(esp_wifi_set_mode(WIFI_MODE_STA), false);
+    ERROR_RETURN(esp_wifi_set_storage(WIFI_STORAGE_RAM), false);
 
 #ifdef WIFI_SSID
     wifi_config_t wifi_config = {
@@ -123,14 +117,27 @@ static bool wifi_init()
     }
 #endif
 
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &event_handler,
+                                                        NULL,
+                                                        &wifi_handler_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &event_handler,
+                                                        NULL,
+                                                        &wifi_handler_got_ip));
+
+    ESP_ERROR_CHECK(esp_netif_set_hostname(esp_netif, WIFI_HOSTNAME));
+
     return true;
 }
 
 static bool wifi_connect(wifi_ap_record_t *ap_info)
 {
     xSemaphoreTake(wifi_conn_done, portMAX_DELAY);
-    ERROR_RETURN(esp_wifi_start(), false);
 
+    ERROR_RETURN(esp_wifi_start(), false);
     if (xSemaphoreTake(wifi_conn_done, WIFI_CONNECT_TIMEOUT * 1000 / portTICK_RATE_MS) == pdTRUE) {
         ERROR_RETURN(esp_wifi_sta_get_ap_info(ap_info), false);
         return true;
@@ -142,12 +149,18 @@ static bool wifi_connect(wifi_ap_record_t *ap_info)
 
 static bool wifi_stop()
 {
-    esp_wifi_disconnect();
-    esp_wifi_stop();
+    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(IP_EVENT,
+                                                          IP_EVENT_STA_GOT_IP,
+                                                          wifi_handler_got_ip));
+    ESP_ERROR_CHECK(esp_event_handler_instance_unregister(WIFI_EVENT,
+                                                          ESP_EVENT_ANY_ID,
+                                                          wifi_handler_any_id));
+
+    ESP_ERROR_CHECK(esp_wifi_disconnect());
+    ESP_ERROR_CHECK(esp_wifi_stop());
 
     return true;
 }
-
 
 //////////////////////////////////////////////////////////////////////
 void app_main()
@@ -156,7 +169,7 @@ void app_main()
     wifi_ap_record_t ap_info;
     vSemaphoreCreateBinary(wifi_conn_done);
 
-    esp_log_level_set("wifi", ESP_LOG_ERROR);
+    esp_log_level_set("wifi", ESP_LOG_INFO);
 
     uint32_t time_start = xTaskGetTickCount();
     if (wifi_init() && wifi_connect(&ap_info)) {
